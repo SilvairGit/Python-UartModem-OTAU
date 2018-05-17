@@ -1,0 +1,5 @@
+
+git+ssh://git@github.com/homersoft/FW-MODULO-CI-UARTCommon.git
+click
+termcolor
+tqdm
