@@ -1,0 +1,14 @@
+{
+  "com_port" : "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AL005IXM-if00-port0",
+  "app_data_file" : "app_data",
+  "firmware_file" : "firmware",
+  "sha256_file" : "sha256",
+  "nvm_file" : "nvm",
+  "supported_page_size" : 1024,
+  "max_mem_size" : 64000,
+  "expected_app_data" : "",
+  "pre_validation_fail" : false,
+  "post_validation_fail" : false,
+  "log_file" : "otau.log",
+  "model" : ["0x1001"]
+}
