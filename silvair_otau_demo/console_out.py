@@ -1,9 +1,9 @@
 import logging
-
 from termcolor import cprint
 from tqdm import tqdm
 
 LOGGER = logging.getLogger(__name__)
+
 
 class ConsoleOut:
     """

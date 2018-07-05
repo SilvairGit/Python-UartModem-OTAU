@@ -151,8 +151,7 @@ class UARTInitNodeState(UARTGenericState):
         :param msg:             Received message
         :return:                None
         """
-        fsm_instance.event_mgr.uart_factory_reset_source(msg.source)
-        fsm_instance.change_state(UART_FSMState.InitDevice)
+        pass
 
     @staticmethod
     def current_state_response_message_event(fsm_instance, msg):

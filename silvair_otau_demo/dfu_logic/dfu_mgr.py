@@ -1,16 +1,20 @@
+import binascii
 import logging
 
 from silvair_uart_common_libs.message_types import DFUStatus
 from silvair_uart_common_libs.messages import GenericMessage, UartCommand, DfuInitResponseMessage, \
-    DfuStatusResponseMessage, DfuPageCreateResponseMessage, DfuPageStoreResponseMessage, DfuCancelRequestMessage, DfuStateRequestMessage
+    DfuStatusResponseMessage, DfuPageCreateResponseMessage, DfuPageStoreResponseMessage, DfuCancelRequestMessage, \
+    DfuStateRequestMessage
 
-from .dfu_fail_mgr import DFU_FailMgr
+from ..console_out import ConsoleOut
+from .dfu_fail_mgr import DFUFailMgr
 from .dfu_fsm import DFU_FSM
 from .dfu_memory import DFUMemory
 from .dfu_nvm import DFU_NVM
 from .states.dfu_fsm_states import DFUState
 
 LOGGER = logging.getLogger(__name__)
+
 
 class DFU_FSM_Output:
     """
@@ -89,8 +93,9 @@ class DFU_Mgr:
                  sender: DFU_FSM_Output,
                  event_mgr: DFU_FSM_EventMgr,
                  memory: DFUMemory,
-                 fail_mgr: DFU_FailMgr,
-                 nvm: str):
+                 fail_mgr: DFUFailMgr,
+                 nvm: str,
+                 expected_app_data: bytes):
         """
         DFU Manager initialization
 
@@ -98,6 +103,7 @@ class DFU_Mgr:
         :param event_mgr:               DFU_FSM_EventMgr, Event manager object
         :param memory:                  DFU_FSM_Memory, Mock memory object
         :param nvm:                     str, NVM file path
+        :param expected_app_data:       bytes, expected app data, ignored if None
         """
 
         assert sender is not None
@@ -108,16 +114,17 @@ class DFU_Mgr:
         self.event_mgr = event_mgr
         self.dfu_memory = memory
         self.fail_mgr = fail_mgr
+        self.expected_app_data = expected_app_data
         self.nvm = DFU_NVM(nvm)
 
         self.initial_state_id = self.nvm.get('current_state_id')
         self.firmware_image_size = self.nvm.get('firmware_image_size')
         self.firmware_image_sha256 = self.nvm.get('firmware_image_sha256')
 
-        if self.firmware_image_size == None:
+        if not self.firmware_image_size:
             self.update_firmware_size(0)
 
-        if self.firmware_image_sha256 == None:
+        if not self.firmware_image_sha256:
             self.update_firmware_sha256(b'')
         else:
             self.firmware_image_sha256 = bytes.fromhex(self.firmware_image_sha256)
@@ -182,20 +189,33 @@ class DFU_Mgr:
         self.update_firmware_size(0)
         self.update_firmware_sha256(b'')
 
-        if not self.fail_mgr.pre_validation(self.dfu_memory, msg):
-            self.send_dfu_init_response(status=DFUStatus.DFU_INVALID_OBJECT)
-            self.event_mgr.dfu_failed()
+        fault = self.fail_mgr.on_pre_validation_fault()
+        if fault is not None:
+            LOGGER.debug("Failure manager called fault: %s", fault)
 
-            LOGGER.debug("Pre-validation failed: " + str(msg))
+            if fault.should_send_response():
+                self.send_dfu_init_response(status=fault.status)
+
+            self.event_mgr.dfu_failed()
+            return False
+
+        if self.expected_app_data is not None and self.expected_app_data != msg.app_data:
+            self.send_dfu_init_response(status=DFUStatus.DFU_INVALID_OBJECT)
+
+            str_expected = binascii.hexlify(self.expected_app_data).decode("ascii")
+            str_got = binascii.hexlify(msg.app_data).decode("ascii")
+
+            ConsoleOut.print_error_message("Invalid app_data! expected: '{}', got: '{}'".format(str_expected, str_got))
             return False
 
         try:
             self.dfu_memory.set_app_data_memory_size(msg.app_data_length)
             self.dfu_memory.write_app_data(msg.app_data)
             self.dfu_memory.set_firmware_memory_size(msg.firmware_size)
-        except:
+        except Exception as err:
             self.send_dfu_init_response(status=DFUStatus.DFU_INSUFFICIENT_RESOURCES)
-            LOGGER.debug("Initializing memory failed: " + str(msg))
+            ConsoleOut.print_error_message("Initializing memory failed: {}".format(str(err)))
+            LOGGER.debug("Initializing memory failed: %s", str(err))
             return False
 
         self.update_firmware_size(msg.firmware_size)
@@ -219,6 +239,15 @@ class DFU_Mgr:
         :param report_empty:    bool, if True firmware offset and firmware crc will be reported 0
         :return:                None
         """
+        fault = self.fail_mgr.after_pre_validation_fault()
+        if fault is not None:
+            LOGGER.debug("Failure manager called fault: %s", fault)
+
+            if fault.should_send_response():
+                self.send_dfu_init_response(status=fault.status)
+
+            return False
+
         response = DfuStatusResponseMessage()
         response.status = status  # TODO
         response.supported_page_size = self.dfu_memory.supported_page_size
@@ -279,6 +308,15 @@ class DFU_Mgr:
         :param msg:     Received message
         :return:        None
         """
+        fault = self.fail_mgr.on_page_create_request_fault()
+        if fault is not None:
+            LOGGER.debug("Failure manager called fault: %s", fault)
+
+            if fault.should_send_response():
+                self.send_page_create_response(status=fault.status)
+
+            return False
+
         self.dfu_memory.create_page(msg.requested_page_size)
         self.send_page_create_response(status=DFUStatus.DFU_SUCCESS)
 
@@ -297,6 +335,15 @@ class DFU_Mgr:
 
         :return:    True if success, False otherwise
         """
+        fault = self.fail_mgr.on_page_store_request_fault()
+        if fault is not None:
+            LOGGER.debug("Failure manager called fault: %s", fault)
+
+            if fault.should_send_response():
+                self.send_page_store_response(status=fault.status)
+
+            return False
+
         try:
             self.dfu_memory.page_store()
         except Exception as e:
@@ -306,8 +353,16 @@ class DFU_Mgr:
             return False
 
         if self.dfu_memory.firmware_offset == self.firmware_image_size:
-            if self.dfu_memory.calc_firmware_sha256() == self.firmware_image_sha256 and \
-                    not self.fail_mgr.post_validation(self.dfu_memory):
+            if self.dfu_memory.calc_firmware_sha256() == self.firmware_image_sha256:
+                fault = self.fail_mgr.on_post_validation_fault()
+                if fault is not None:
+                    LOGGER.debug("Failure manager called fault: %s", fault)
+
+                    if fault.should_send_response():
+                        self.send_page_store_response(status=DFUStatus.DFU_INVALID_OBJECT)
+
+                    self.event_mgr.dfu_failed()
+                    return False
 
                 self.send_page_store_response(status=DFUStatus.DFU_FIRMWARE_SUCCESSFULLY_UPDATED)
 
@@ -327,7 +382,6 @@ class DFU_Mgr:
 
             LOGGER.debug("Page store success")
             return True
-
 
     def drop_otau(self):
         """

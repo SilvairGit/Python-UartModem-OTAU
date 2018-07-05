@@ -157,7 +157,7 @@ class UARTDeviceState(UARTGenericState):
         :param msg:             Received message
         :return:                None
         """
-        fsm_instance.event_mgr.uart_factory_reset_source(msg.source)
+        fsm_instance.event_mgr.uart_factory_reset()
         fsm_instance.change_state(UART_FSMState.InitDevice)
 
     @staticmethod

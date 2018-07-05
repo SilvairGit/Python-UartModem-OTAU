@@ -198,9 +198,9 @@ class Sender(UART_FSM_Output, DFU_FSM_Output):
             LOGGER.debug("Sending UART message " + bytes_to_readable_hex(data))
             self.uart_adapter.write_uart_frame(data)
         except InvalidLen as e:
-            LOGGER.exception("Error sending UART message: InvalidLen")
+            LOGGER.exception("Error sending UART message: InvalidLen. {}".format(e))
         except InvalidOpcode as e:
-            LOGGER.exception("Error sending UART message: InvalidOpcode")
+            LOGGER.exception("Error sending UART message: InvalidOpcode. {}".format(e))
 
 
 def bytes_to_readable_hex(data: bytes):

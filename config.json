@@ -10,5 +10,7 @@
   "pre_validation_fail" : false,
   "post_validation_fail" : false,
   "log_file" : "otau.log",
-  "model" : ["0x1001"]
+  "model" : ["0x1300"],
+  "clear": false,
+  "forget_state": false
 }

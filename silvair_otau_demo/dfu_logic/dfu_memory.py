@@ -4,7 +4,7 @@ import logging
 
 LOGGER = logging.getLogger(__name__)
 
-MIN_SUPPORTED_PAGE_SIZE = 21
+MIN_SUPPORTED_PAGE_SIZE = 256
 
 
 class DFUMemoryError(Exception):
@@ -29,7 +29,7 @@ class DFUMemory:
         :param firmware_file:       Path to file with firmware data
         :param sha256_file:         Path to file with SHA256
         :param supported_page_size: Max supported page size
-        :param max_mem_size:        Max supported firmware image size
+        :param max_mem_size:        Max supported firmware image size, 0 implies unlimited
         """
         self.app_data_file_path = app_data_file
         self.firmware_file_path = firmware_file
@@ -66,8 +66,8 @@ class DFUMemory:
         :param size:    int, firmware memory size
         :return:        False if size is bigger than max mem size, True otherwise
         """
-        if size > self.max_mem_size and self.max_mem_size != 0:
-            raise DFUMemoryError
+        if self.max_mem_size > 0 and size > self.max_mem_size:
+            raise DFUMemoryError("Firmware is too big. Maximum supported firmware size: {}".format(self.max_mem_size))
 
         self.firmware_memory = bytearray()
         LOGGER.debug("Got firmware memory size to {:d}".format(size))
@@ -95,8 +95,8 @@ class DFUMemory:
             with open(self.app_data_file_path, 'wb') as app_data_file:
                 app_data_file.write(self.app_data_memory)
         else:
-            LOGGER.debug("Attempted to write too big or too small app data, expected: " + str(
-                self.app_data_memory_size) + " got: " + str(len(data)))
+            LOGGER.debug("Attempted to write too big or too small app data, expected: %s got: %s",
+                         str(self.app_data_memory_size), str(len(data)))
             raise DFUMemoryError
 
         LOGGER.debug("Written app data memory")

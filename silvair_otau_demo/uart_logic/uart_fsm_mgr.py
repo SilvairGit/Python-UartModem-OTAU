@@ -97,11 +97,10 @@ class UART_FSM_EventMgr:
         """
         pass
 
-    def uart_factory_reset_source(self, cause: FactoryResetSource):
+    def uart_factory_reset(self):
         """
         Handle UART factory reset event
 
-        :param cause:   FactoryResetSource(IntEnum), factory reset source
         :return:        None
         """
         pass

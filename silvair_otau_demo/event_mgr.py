@@ -3,7 +3,6 @@ import logging
 from silvair_uart_common_libs.message_types import FactoryResetSource, AttentionEvent, Error
 from silvair_uart_common_libs.messages import UartCommand
 
-from .console_out import ConsoleOut
 from .dfu_logic.dfu_mgr import DFU_FSM_EventMgr
 from .dfu_logic.states.dfu_fsm_states import DFUState
 from .uart_logic.states.uart_fsm_states import UART_FSMState
@@ -11,7 +10,15 @@ from .uart_logic.uart_fsm_mgr import UART_FSM_EventMgr
 
 LOGGER = logging.getLogger(__name__)
 
-class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
+
+class TemplateDFUEventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
+    """
+    Template for event manager classes.
+    """
+    pass
+
+
+class EventMgr(TemplateDFUEventMgr):
     """
     Handles events coming from inside DFU script
     """
@@ -19,29 +26,37 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
     def __init__(self, cli):
         """
         Initialize event mgr
-        :param cli:     CLI for outputing messages
+
+        :param cli: CLI for printing messages
         """
         assert cli is not None
         self.cli = cli
 
         LOGGER.info("EventMgr initialized")
 
-    def uart_unexpected_message(self, type: UartCommand):
+    def stop(self):
+        """
+        Stops progress bar.
+
+        """
+        self.cli.stop_progress_bar()
+
+    def uart_unexpected_message(self, opcode: UartCommand):
         """
         Handle uart unexpected message event
 
-        :param type: UartCommand (IntEnum), message opcode
-        :return:     None
+        :param opcode:  UartCommand (IntEnum), message opcode
+        :return:        None
         """
-        self.cli.print_error_message("Received unexpected UART message: " + type.name)
+        LOGGER.debug("Received unexpected UART message: " + opcode.name)
 
     def uart_mesh_request(self, opcode: int, command: bytes):
         """
         Handle uart mesh request message event
 
-        :param opcode: int, mesh opcode
+        :param opcode:  int, mesh opcode
         :param command: bytes, mesh_command
-        :return:     None
+        :return:        None
         """
         self.cli.print_standard_message("Received UART Mesh Message Request with opcode: 0x{:04x}".format(opcode))
 
@@ -49,8 +64,8 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
         """
         Handle uart state change event
 
-        :param type: UART_FSMState(IntEnum), new state
-        :return:     None
+        :param state: UART_FSMState(IntEnum), new state
+        :return:      None
         """
         self.cli.print_important_message("UART state changed to: " + state.name)
 
@@ -71,8 +86,8 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
         """
         Handles firmware version update event
 
-        :param model_ids:   bytes, new firmware version description
-        :return:            None
+        :param firmware_version:   bytes, new firmware version description
+        :return:                   None
         """
         self.cli.print_informative_message("UART Firmware Version: " + firmware_version.hex())
 
@@ -80,19 +95,18 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
         """
         Handles device uuid update event
 
-        :param model_ids:   bytes, new uuid
-        :return:            None
+        :param uuid:   bytes, new uuid
+        :return:       None
         """
         self.cli.print_informative_message("UART UUID: " + uuid.hex())
 
-    def uart_factory_reset_source(self, cause: FactoryResetSource):
+    def uart_factory_reset(self):
         """
         Handle UART factory reset event
 
-        :param cause:   FactoryResetSource(IntEnum), factory reset source
         :return:        None
         """
-        self.cli.print_standard_message("UART Factory Reset! " + cause.name)
+        self.cli.print_standard_message("UART Factory Reset!")
 
     def uart_soft_reset(self):
         """
@@ -104,8 +118,8 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
         """
         Handle UART attention event
 
-        :param cause:   AttentionEvent(IntEnum), attention event description
-        :return:        None
+        :param attention:   AttentionEvent(IntEnum), attention event description
+        :return:            None
         """
         self.cli.print_important_message("UART Attention: " + attention.name)
 
@@ -113,29 +127,36 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
         """
         Handle UART error event
 
-        :param cause:   Error(IntEnum), error event description
+        :param error:   Error(IntEnum), error event description
         :return:        None
         """
-        self.cli.print_error_message("UART Error! " + error.name)
-	
+        error_handled = False
+
+        if error == Error.InvalidState:
+            LOGGER.debug("UART Error! %s", error.name)
+            error_handled = True
+
         if error == Error.NoLicenseForModelRegistration or error == Error.NoResourcesForModelRegistration:
             LOGGER.critical("Not recoverable error occurred: " + error.name)
             exit()
 
-    def dfu_unexpected_message(self, type: UartCommand):
+        if not error_handled:
+            self.cli.print_error_message("UART Error! " + error.name)
+
+    def dfu_unexpected_message(self, dfu_msg: UartCommand):
         """
         Handle DFU unexpected message event
 
-        :param cause:   UartCommand, message opcode
-        :return:        None
+        :param dfu_msg:   UartCommand, message opcode
+        :return:          None
         """
-        self.cli.print_error_message("Received unexpected DFU message")
+        self.cli.print_error_message("Received unexpected DFU message :{}".format(dfu_msg.name))
 
     def dfu_state_changed(self, state: DFUState):
         """
         Handle DFU state change event
 
-        :param cause:   DFUState(IntEnum), new DFU state
+        :param state:   DFUState(IntEnum), new DFU state
         :return:        None
         """
         # if state != DFUState.UploadPage:
@@ -148,6 +169,7 @@ class EventMgr(UART_FSM_EventMgr, DFU_FSM_EventMgr):
         :param firmware_size:   int, firmware size
         :param firmware_sha:    int, firmware crc
         :param app_data:        bytes, received app data
+        :param initial          int, initial progress
         :return:                None
         """
         output = "DFU Initialized!\n"

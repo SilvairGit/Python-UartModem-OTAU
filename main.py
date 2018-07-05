@@ -1,221 +1,209 @@
+import click
 import json
 import logging
 import os
 import sys
 import time
 
-import click
-from silvair_uart_common_libs.message_types import ModelID, ModelDesc
-from silvair_uart_common_libs.uart_common_classes import UartAdapter
-
-from silvair_otau_demo.dfu_logic.dfu_fail_mgr import DFU_FailMgr
+from silvair_otau_demo.app_data import AppData
 from silvair_otau_demo.console_out import ConsoleOut
-from silvair_otau_demo.dfu_logic.dfu_memory import DFUMemory, MIN_SUPPORTED_PAGE_SIZE
-from silvair_otau_demo.dfu_logic.dfu_mgr import DFU_Mgr
-from silvair_otau_demo.dispatcher import Dispatcher, Sender
+from silvair_otau_demo.dfu_logic.dfu_fail_mgr import DFUFailMgr, DFUFault
 from silvair_otau_demo.event_mgr import EventMgr
-from silvair_otau_demo.uart_logic.uart_fsm_mgr import UART_FSM
+from silvair_otau_demo.script_mgr import McuOtauMock
+from silvair_uart_common_libs.message_types import DFUStatus
+from silvair_uart_common_libs.uart_common_classes import UartAdapter
+from silvair_otau_demo.dfu_logic.dfu_memory import MIN_SUPPORTED_PAGE_SIZE
 
 LOGGER = logging.getLogger('silvair_otau_demo')
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-log = logging.getLogger('silvair_otau_demo')
-log.setLevel(logging.DEBUG)
+LOGGER.setLevel(logging.DEBUG)
+FORMATTER = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-def config_logger(verbose):
+def config_logger_stdout(verbose, logger, formatter):
     """
-    Configure stdout logger
+    Configure stdout for given logger
 
     :param verbose: Verbosity level
+    :param logger: logger object instance
+    :param formatter: formatter for logger
     """
     ch_cli = logging.StreamHandler(sys.stdout)
     ch_cli.setFormatter(formatter)
-    ch_cli.setLevel(logging.ERROR)
+    ch_cli.setLevel(logging.WARNING)
     if verbose > 0:
         if verbose == 1:
             ch_cli.setLevel(logging.INFO)
         elif verbose == 2:
             ch_cli.setLevel(logging.DEBUG)
-    log.addHandler(ch_cli)
+    logger.addHandler(ch_cli)
 
-def config_file_logger(path):
+
+def config_logger_file(path, logger, formatter):
     """
-    Configure file logger
+    Configure file log
 
     :param path: Path to file
+    :param logger: logger object instance
+    :param formatter: formatter for logger
     """
     ch_file = logging.FileHandler(path)
     ch_file.setFormatter(formatter)
     ch_file.setLevel(logging.DEBUG)
-    log.addHandler(ch_file)
+    logger.addHandler(ch_file)
 
-def parse_model_ids(model):
+
+def parse_config_file(config_file_path, logger):
     """
-    Parse given model ids from HEX strings to ints
+    Parses config file to dictionary
 
-    :param model:   list, model ids as strings
-    :return:        tuple, model ids as ints
+    :param config_file_path: str, path to configuration file
+    :param logger: logger object instance
+    :return: dict with parsed parameters from config file
     """
-    models_to_register = tuple()
-    for m in model:
-        LOGGER.debug("Requested models to register: %s" % m)
-        m_id = ModelDesc(ModelID(int(m, 16)))
-        models_to_register += (m_id,)
+    config_dict = dict()
+    logger.info("Loading configuration from file")
+    try:
+        with open(config_file_path, "r") as file:
+            config = json.load(file)
+            config_dict["com_port"] = config["com_port"]
+            config_dict["clear"] = bool(config["clear"])
+            config_dict["forget_state"] = bool(config["forget_state"])
+            config_dict["app_data_file"] = config["app_data_file"]
+            config_dict["firmware_file"] = config["firmware_file"]
+            config_dict["sha256_file"] = config["sha256_file"]
+            config_dict["nvm_file"] = config["nvm_file"]
+            config_dict["supported_page_size"] = config["supported_page_size"]
+            config_dict["max_mem_size"] = config["max_mem_size"]
+            config_dict["expected_app_data"] = config["expected_app_data"]
+            config_dict["pre_validation_fail"] = bool(config["pre_validation_fail"])
+            config_dict["post_validation_fail"] = bool(config["post_validation_fail"])
+            config_dict["log_file"] = config["log_file"]
+            config_dict["model"] = config["model"]
+    except FileNotFoundError:
+        logger.error("File %s not found", config_file_path)
+        raise
+    except KeyError as e:
+        logger.error("Config file should contain %s key", e.args[0])
+        raise
+    return config_dict
 
-    return models_to_register
 
-def load_app_data(expected_app_data):
+def remove_file(path):
     """
-    Loads app data.
+    Removes file.
 
-    :param expected_app_data:   Path to file with expected app data
-    :return:                    bytes, expected app data
+    :param path: str, path to file to be removed
+    :return: bool True when success False when failure
     """
-    if expected_app_data:
-        try:
-            LOGGER.info("Loading expected app data from file")
+    path = os.path.abspath(path)
 
-            with open(expected_app_data, 'rb') as expected_app_data_file:
-                expected_app_data_bytes = expected_app_data_file.read()
+    if not os.path.exists(path):
+        LOGGER.warning("Could not remove file: '%s'. File not exists.", path)
+        return False
 
-            LOGGER.debug("Loaded app data: " + expected_app_data.hex())
-        except:
-            LOGGER.error("Failed to open expected app data file, ignoring app data.")
+    if not os.path.isfile(path):
+        LOGGER.warning("Could not remove file: '%s'. Invalid file type.", path)
+        return False
 
-            expected_app_data_bytes = None
-    else:
-        expected_app_data_bytes = None
+    os.remove(path)
+    return True
 
-    return expected_app_data_bytes
 
 @click.command()
-@click.option('-c', '--config_file', help='JSON configuration file path')
+@click.option('-c', '--config_file', help='JSON configuration file path. Overwrites cli arguments.')
 @click.option('-s', '--com_port', help='COM port name')
 @click.option('-a', '--app_data_file', default='app_data', help='File to save app data')
 @click.option('-f', '--firmware_file', default='firmware', help='File to save firmware data')
 @click.option('-h', '--sha256_file', default='sha256', help='File to save firmware SHA256')
 @click.option('-n', '--nvm_file', default='nvm', help='File to save DFU state')
 @click.option('-p', '--supported_page_size', default=1024, help='Max supported page size in bytes')
-@click.option('-x', '--max_mem_size', default=0, type=int, help='Max supported firmware size in bytes')
+@click.option('-x', '--max_mem_size', default=0, type=int, help='Max supported firmware size in bytes, 0 implies unlimited')
 @click.option('-e', '--expected_app_data', type=str, help='File with expected app data (binary) used in pre validation')
-@click.option('-b', '--pre_validation_fail', type=bool, default=False, help='Deliberately cause pre validation fail')
-@click.option('-q', '--post_validation_fail', type=bool, default=False, help='Deliberately cause post validation fail')
+@click.option('-b', '--pre_validation_fail', is_flag=True, help='Deliberately cause pre validation fail')
+@click.option('-q', '--post_validation_fail', is_flag=True, help='Deliberately cause post validation fail')
 @click.option('-v', '--verbose', count=True, help='Verbosity level; -vv for full log')
 @click.option('-l', '--log_file', default='otau.log', help='File to save logs')
-@click.option('-t', '--forget_state', count=True, help='Set to ignore saved state')
-@click.option('-r', '--clear', count=True, help='Remove created files on start')
-@click.option('-m', '--model', type=str, help='Model to register', multiple=True)
-def start(config_file,
-          com_port,
-          app_data_file,
-          firmware_file,
-          sha256_file,
-          nvm_file,
-          supported_page_size,
-          max_mem_size,
-          expected_app_data,
-          pre_validation_fail,
-          post_validation_fail,
-          verbose,
-          log_file,
-          forget_state,
-          clear,
-          model):
+@click.option('-t', '--forget_state', is_flag=True, default=False, help='Set to ignore saved state')
+@click.option('-r', '--clear', is_flag=True, help='Remove created files on start')
+@click.option('-m', '--model', type=str, multiple=True,
+              help='Model to register, use multiple times to add more than one model. Example: -m 0003 -m 1300')
+def start(**kwargs):
     """
-    Python OTAU script.
+    Start OTAU script.
 
     If config file is specified other arguments are ignored.
     """
-    if clear:
-        print('Clearing files')
-        os.remove(app_data_file)
-        os.remove(firmware_file)
-        os.remove(sha256_file)
-        os.remove(nvm_file)
-
-    if com_port is None and config_file is None:
-        print("You have to specify at least com port or config json! See --help for more")
+    if kwargs["com_port"] is None and kwargs["config_file"] is None:
+        LOGGER.warning("You have to specify at least com port or config json! See --help for more")
         return
 
-    config_logger(verbose)
+    if kwargs["config_file"]:
+        cli_args = parse_config_file(kwargs["config_file"], LOGGER)
+    else:
+        cli_args = kwargs
 
-    LOGGER.info("Starting application!")
+    config_logger_stdout(kwargs["verbose"], LOGGER, FORMATTER)
+    config_logger_file(cli_args["log_file"], LOGGER, FORMATTER)
 
-    if config_file:
-        LOGGER.info("Loading configuration from file")
-        try:
-            with open(config_file) as file:
-                config = json.load(file)
-                com_port = config['com_port']
-                app_data_file = config['app_data_file']
-                firmware_file = config['firmware_file']
-                sha256_file = config['sha256_file']
-                nvm_file = config['nvm_file']
-                supported_page_size = config['supported_page_size']
-                max_mem_size = config['max_mem_size']
-                expected_app_data = config['expected_app_data']
-                pre_validation_fail = config['pre_validation_fail']
-                post_validation_fail = config['post_validation_fail']
-                log_file = config['log_file']
-                model = config['model']
-        except FileNotFoundError:
-            print("File {:s} not found".format(config_file))
-            exit()
-        except KeyError as e:
-            print("Config file should contain {:s} key".format(e.args[0]))
-            exit()
+    if int(cli_args["supported_page_size"]) < MIN_SUPPORTED_PAGE_SIZE:
+        LOGGER.error("Supported page size has to be bigger than {:d}".format(MIN_SUPPORTED_PAGE_SIZE))
+        raise ValueError
 
-    config_file_logger(log_file)
+    if cli_args["clear"]:
+        LOGGER.debug("Clearing files")
+        remove_file(cli_args["app_data_file"])
+        remove_file(cli_args["firmware_file"])
+        remove_file(cli_args["sha256_file"])
+        remove_file(cli_args["nvm_file"])
 
-    if supported_page_size < MIN_SUPPORTED_PAGE_SIZE:
-        print("Supported page size has to be bigger than {:d}".format(MIN_SUPPORTED_PAGE_SIZE))
-        exit()
+    if cli_args["forget_state"]:
+        LOGGER.debug("Clearing nvm file")
+        with open(cli_args["nvm_file"], "w") as _:
+            pass
 
-    event_mgr = EventMgr(ConsoleOut)
-    uart_adapter = UartAdapter(com_port)
-    sender = Sender(uart_adapter)
-
-    models_to_register = parse_model_ids(model)
-    uart_fsm = UART_FSM(sender, event_mgr, default_models=models_to_register)
-
-    if forget_state:
-        LOGGER.info("Clearing nvm file")
-        nvm_file_handler = open(nvm_file, 'w')
-        nvm_file_handler.close()
-
-    expected_app_data_bytes = load_app_data(expected_app_data)
-    dfu_fail_mgr = DFU_FailMgr(expected_app_data_bytes,
-                               pre_validation_fail,
-                               post_validation_fail)
-    dfu_memory = DFUMemory(app_data_file,
-                           firmware_file,
-                           sha256_file,
-                           supported_page_size,
-                           max_mem_size)
-    dfu_mgr = DFU_Mgr(sender,
-                      event_mgr,
-                      dfu_memory,
-                      dfu_fail_mgr,
-                      nvm_file)
-
-    dfu_dispatcher = Dispatcher(uart_fsm, dfu_mgr.dfu_fsm)
-    uart_adapter.register_observer(dfu_dispatcher)
-
+    uart_adapter = UartAdapter(port=cli_args["com_port"])
     uart_adapter.start()
-    uart_fsm.start()
-    dfu_mgr.dfu_fsm.start()
+
+    cli_event_manager = EventMgr(ConsoleOut)
+    dfu_fail_mgr = DFUFailMgr()
+
+    if cli_args["pre_validation_fail"]:
+        dfu_fail_mgr.add_on_pre_validation_fault(DFUFault.create_fault_with_status(None, DFUStatus.DFU_INVALID_OBJECT))
+
+    if cli_args["post_validation_fail"]:
+        dfu_fail_mgr.add_on_post_validation_fault(DFUFault.create_fault_with_status(None, DFUStatus.DFU_INVALID_OBJECT))
+
+    if not len(cli_args["model"]):
+        LOGGER.warning("Model not provided. Will register Light Lightness Server (1300)")
+        cli_args["model"] = ("1300",)
 
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        LOGGER.info("Caught KeyboardInterrupt")
+        McuOtauMock(uart_adapter,
+                    cli_event_manager,
+                    dfu_fail_mgr,
+                    cli_args["app_data_file"],
+                    cli_args["firmware_file"],
+                    cli_args["sha256_file"],
+                    cli_args["nvm_file"],
+                    cli_args["supported_page_size"],
+                    cli_args["max_mem_size"],
+                    cli_args["expected_app_data"],
+                    cli_args["model"],
+                    )
 
-    uart_adapter.stop()
-    ConsoleOut.stop_progress_bar()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            LOGGER.info("Caught Keyboard interrupt!")
 
-    print("Bye!")
+    except ValueError as e:
+        LOGGER.info("Caught exception: {}!".format(e))
+
+    finally:
+        uart_adapter.stop()
+        cli_event_manager.stop()
+
 
 if __name__ == "__main__":
     start()

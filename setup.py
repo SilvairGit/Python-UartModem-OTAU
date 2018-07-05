@@ -1,7 +1,10 @@
 from setuptools import setup
 
+__version__ = "2.8.0"
+
 setup(
     name="silvair_otau_demo",
+    version=__version__,
     author="Tomasz Szewczyk",
     author_email="tomasz.szewczyk@silvair.com",
     py_modules=["main"],
@@ -16,10 +19,10 @@ setup(
     install_requires=["click>=6.7",
                       "termcolor>=1.1.0",
                       "tqdm>=4.22.0",
-                      "silvair-uart-common-libs==0.0.1"
+                      "silvair_uart_common_libs==2.8.0"
                     ],
     dependency_links=[
-        "git+ssh://git@github.com/SilvairGit/Python-UartModem-Common.git#egg=silvair-uart-common-libs-0.0.1"
+        "git+ssh://git@github.com/SilvairGit/Python-UartModem-Common.git@2.8.0#egg=silvair_uart_common_libs-2.8.0"
     ],
     entry_points='''
     [console_scripts]
