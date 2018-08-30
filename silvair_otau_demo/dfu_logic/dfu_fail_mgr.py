@@ -1,5 +1,6 @@
 import enum
 import logging
+import time
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class DFUFault(object):
     It contains all information related to the fault context.
     """
 
-    def __init__(self, fault_type, call_number, status, callback_func=None):
+    def __init__(self, fault_type, call_number, status, callback_func=None, delay_s=0.0):
         """ Construct DFU fault object.
 
         :param fault_type:      DFUFaultType,      type of fault.
@@ -29,6 +30,9 @@ class DFUFault(object):
         :param callback_func:   Callable,          Function that will be called when fault should occur.
                                                    Callback function contains only one argument fault that occured.
                                                    e.g. def fault_handler_func(fault): ...
+        :param delay_s:         float,             delay `callback_fault` call by `delay_s` seconds.
+                                                   Delay will be executed also in case when `callback_fault` is None.
+
         """
         if call_number is not None:
             assert call_number > 0, "Call number must be higher than 0."
@@ -37,6 +41,7 @@ class DFUFault(object):
         self.status = status
         self.call_number = call_number
         self._callback_func = callback_func
+        self._delay_s = delay_s
 
     def should_send_response(self):
         """ Value that say if response should be send or not.
@@ -46,31 +51,40 @@ class DFUFault(object):
         return self.fault_type == DFUFaultType.FAULT_WITH_STATUS
 
     def call(self):
-        """ Call callback function if callback function is not None.
-        """
+        """ Call callback function if callback function is not None. """
+        time.sleep(self._delay_s)
+
         if self._callback_func is None:
             return
 
         self._callback_func(self)
 
     @classmethod
-    def create_no_response_fault(cls, call_number, callback_func=None):
+    def create_no_response_fault(cls, call_number, callback_func=None, delay_s=0.0):
         """ Create fault that simulate no response.
 
-        :param call_number: int or None, number of call on which fault should be called.
-                                         None fault called on every call.
+        :param call_number:     int or None, number of call on which fault should be called.
+                                             None fault called on every call.
+        :param callback_func:   Callable,    Function that will be called when fault should occur.
+                                             Callback function contains only one argument fault that occured.
+                                             e.g. def fault_handler_func(fault): ...
+        :param delay_s:         float,       delay `callback_fault` call by `delay_s` seconds.
         """
-        return cls(DFUFaultType.NO_RESPONSE, call_number, None, callback_func)
+        return cls(DFUFaultType.NO_RESPONSE, call_number, None, callback_func, delay_s)
 
     @classmethod
-    def create_fault_with_status(cls, call_number, status, callback_func=None):
+    def create_fault_with_status(cls, call_number, status, callback_func=None, delay_s=0.0):
         """ Create fault that simulate response with status.
 
-        :param call_number: int or None, number of call on which fault should be called.
-                                         None fault called on every call.
-        :param status:      DFUStatus,   status that should be send in the response.
+        :param call_number:     int or None, number of call on which fault should be called.
+                                             None fault called on every call.
+        :param status:          DFUStatus,   status that should be send in the response.
+        :param callback_func:   Callable,    Function that will be called when fault should occur.
+                                             Callback function contains only one argument fault that occured.
+                                             e.g. def fault_handler_func(fault): ...
+        :param delay_s:         float,       delay `callback_fault` call by `delay_s` seconds.
         """
-        return cls(DFUFaultType.FAULT_WITH_STATUS, call_number, status, callback_func)
+        return cls(DFUFaultType.FAULT_WITH_STATUS, call_number, status, callback_func, delay_s)
 
 
 class DFUFaultCaller(object):

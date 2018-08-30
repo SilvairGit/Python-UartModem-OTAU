@@ -176,7 +176,7 @@ class EventMgr(TemplateDFUEventMgr):
         output += "Firmware size:\t{:d}\n".format(firmware_size)
 
         output += "Firmware SHA256:\t{:s}\n".format(firmware_sha.hex())
-        output += "Received App data:\n"
+        output += "Received App data:\t{:s}\n".format(app_data.hex())
 
         bytes_in_row = 16
         for i in range(int(len(app_data) / bytes_in_row)):

@@ -1,4 +1,4 @@
-git+ssh://git@github.com/SilvairGit/Python-UartModem-Common.git@2.8.0#egg=silvair_uart_common_libs
+git+ssh://git@github.com/SilvairGit/Python-UartModem-Common.git@2.9.0#egg=silvair_uart_common_libs
 click==6.7
 termcolor==1.1.0
 tqdm==4.23.3
